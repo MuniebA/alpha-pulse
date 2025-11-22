@@ -1,0 +1,11 @@
+websockets
+asyncio
+sqlalchemy
+psycopg2-binary
+feedparser
+beautifulsoup4
+vaderSentiment
+pandas
+prophet
+streamlit
+plotly
