@@ -10,7 +10,7 @@ import os
 db_host = os.getenv("DB_HOST", "localhost")
 DB_URL = f"postgresql://user:password@{db_host}:5432/alpha_db"
 
-TRAINING_WINDOW_MINUTES = 1000  # Look back 480 minutes
+TRAINING_WINDOW_MINUTES = 60  # Look back 60 minutes
 FORECAST_HORIZON = 5         # Predict next 5 minutes
 
 engine = create_engine(DB_URL)
