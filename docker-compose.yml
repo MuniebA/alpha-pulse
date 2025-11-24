@@ -1,18 +1,48 @@
-version: "3.9"
+version: "3.8"
 
 services:
+  # 1. DATABASE SERVICE
   db:
     image: postgres:15-alpine
     container_name: alpha_pulse_db
     restart: always
-
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
       POSTGRES_DB: alpha_db
-
     ports:
       - "5432:5432"
-
     volumes:
       - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d alpha_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. ETL WORKER (Runs Stream + News + Model)
+  etl_worker:
+    build: .
+    container_name: alpha_pulse_etl
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DB_HOST=db  # Tells Python to connect to the 'db' container, not localhost
+      - PYTHONUNBUFFERED=1
+    command: ["bash", "start_etl.sh"]
+
+  # 3. DASHBOARD (Streamlit)
+  dashboard:
+    build: .
+    container_name: alpha_pulse_dashboard
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8501:8501"
+    environment:
+      - DB_HOST=db
+    command: ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0"]

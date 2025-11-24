@@ -4,6 +4,7 @@ import datetime
 from bs4 import BeautifulSoup
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from sqlalchemy import create_engine, text
+import os
 
 # --- CONFIGURATION ---
 # "Dirty" Data Sources (RSS Feeds)
@@ -13,7 +14,9 @@ RSS_FEEDS = [
     "https://cryptopotato.com/feed/"
 ]
 
-DB_URL = "postgresql://user:password@localhost:5432/alpha_db"
+# Defaults to 'localhost' if not running in Docker
+db_host = os.getenv("DB_HOST", "localhost")
+DB_URL = f"postgresql://user:password@{db_host}:5432/alpha_db"
 
 # --- SETUP ---
 analyzer = SentimentIntensityAnalyzer()

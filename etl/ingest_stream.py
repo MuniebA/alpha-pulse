@@ -3,10 +3,14 @@ import websockets
 import json
 from datetime import datetime, timezone
 from sqlalchemy import create_engine, text
+import os
 
 
 # --- CONFIGURATION ---
-DB_URL = "postgresql://user:password@localhost:5432/alpha_db"
+# Defaults to 'localhost' if not running in Docker
+db_host = os.getenv("DB_HOST", "localhost")
+DB_URL = f"postgresql://user:password@{db_host}:5432/alpha_db"
+
 BINANCE_URL = "wss://stream.binance.com:9443/ws/btcusdt@trade"
 
 # --- DATABASE CONNECTION ---

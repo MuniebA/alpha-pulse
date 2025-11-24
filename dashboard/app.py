@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from sqlalchemy import create_engine, text
 import time
+import os
 
 # --- CONFIGURATION ---
 st.set_page_config(
@@ -11,7 +12,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-DB_URL = "postgresql://user:password@localhost:5432/alpha_db"
+# Defaults to 'localhost' if not running in Docker
+db_host = os.getenv("DB_HOST", "localhost")
+DB_URL = f"postgresql://user:password@{db_host}:5432/alpha_db"
 
 @st.cache_resource
 def get_engine():
