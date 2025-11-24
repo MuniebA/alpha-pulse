@@ -7,8 +7,8 @@ python etl/ingest_stream.py &
 python etl/ingest_news.py &
 
 # Start the Model Engine in the background
-# We wait 10 seconds to ensure the database is ready and streams are initializing
-sleep 10
+# # We wait 10 seconds to ensure the database is ready and streams are initializing
+# sleep 10
 python etl/model_engine.py &
 
 # Keep the container running

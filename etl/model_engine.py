@@ -3,14 +3,14 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from prophet import Prophet
 import logging
-import
+import os
 
 # --- CONFIGURATION ---
 # Defaults to 'localhost' if not running in Docker
 db_host = os.getenv("DB_HOST", "localhost")
 DB_URL = f"postgresql://user:password@{db_host}:5432/alpha_db"
 
-TRAINING_WINDOW_MINUTES = 480  # Look back 480 minutes
+TRAINING_WINDOW_MINUTES = 1000  # Look back 480 minutes
 FORECAST_HORIZON = 5         # Predict next 5 minutes
 
 engine = create_engine(DB_URL)

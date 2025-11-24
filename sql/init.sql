@@ -1,0 +1,33 @@
+-- 1. RAW TICKS TABLE
+CREATE TABLE IF NOT EXISTS raw_ticks (
+    id SERIAL PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL,
+    price DOUBLE PRECISION NOT NULL,
+    quantity DOUBLE PRECISION NOT NULL,
+    trade_time TIMESTAMP,
+    ingest_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. MARKET CANDLES TABLE
+CREATE TABLE IF NOT EXISTS market_candles (
+    bucket_time TIMESTAMP NOT NULL,
+    symbol VARCHAR(20) NOT NULL,
+    open DOUBLE PRECISION NOT NULL,
+    high DOUBLE PRECISION NOT NULL,
+    low DOUBLE PRECISION NOT NULL,
+    close DOUBLE PRECISION NOT NULL,
+    volume DOUBLE PRECISION DEFAULT 0,
+    trade_count INT DEFAULT 0,
+    sentiment_score FLOAT DEFAULT 0,
+    PRIMARY KEY (bucket_time, symbol)
+);
+
+-- 3. FORECAST LOGS TABLE
+CREATE TABLE IF NOT EXISTS forecast_logs (
+    id SERIAL PRIMARY KEY,
+    execution_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    forecast_time TIMESTAMP NOT NULL,
+    predicted_price DOUBLE PRECISION NOT NULL,
+    lower_bound DOUBLE PRECISION,
+    upper_bound DOUBLE PRECISION
+);
