@@ -98,7 +98,7 @@ Issues and PRs are welcome. For big changes, open an issue first to discuss the 
 
 ## License
 
-This repository does not include a license file. Add a `LICENSE` if you intend to open-source it.
+MIT License
 
 ---
 
