@@ -6,7 +6,7 @@ import logging
 
 # --- CONFIGURATION ---
 DB_URL = "postgresql://user:password@localhost:5432/alpha_db"
-TRAINING_WINDOW_MINUTES = 60  # Look back 60 minutes
+TRAINING_WINDOW_MINUTES = 480  # Look back 480 minutes
 FORECAST_HORIZON = 10         # Predict next 10 minutes
 
 engine = create_engine(DB_URL)

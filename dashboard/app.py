@@ -30,7 +30,7 @@ TIME_RANGES = {
 }
 
 def load_data(interval_code):
-    """Fetch clean OHLC data and ONLY the latest forecast batch."""
+    """Fetch clean OHLC data and a continuous forecast history."""
     
     if interval_code == "ALL":
         time_clause = ""
@@ -40,7 +40,6 @@ def load_data(interval_code):
         limit_clause = ""
 
     # 1. Fetch Market Data
-    # Added 'volume' to SELECT so the table at the bottom works
     query_market = text(f"""
         SELECT bucket_time, open, high, low, close, sentiment_score, volume
         FROM market_candles
@@ -49,15 +48,23 @@ def load_data(interval_code):
         {limit_clause}
     """)
     
-    # 2. Fetch ONLY The Latest Forecast Batch
-    query_forecast = text("""
-        WITH LatestRun AS (
-            SELECT MAX(execution_time) as max_exec FROM forecast_logs
-        )
-        SELECT forecast_time, predicted_price, lower_bound, upper_bound
-        FROM forecast_logs, LatestRun
-        WHERE execution_time = LatestRun.max_exec
-        ORDER BY forecast_time ASC
+    # 2. Fetch Forecast Data (The "Continuous Line" Fix)
+    # We use DISTINCT ON to grab the LATEST prediction made for every specific timestamp.
+    # This means if the AI predicted "10:05" five times (at 10:00, 10:01, etc.),
+    # we only take the most recent opinion it had.
+    if interval_code == "ALL":
+        fc_time = ""
+    else:
+        # We look a bit further ahead for the forecast (+60 mins) to show future curve
+        fc_time = f"WHERE forecast_time >= NOW() - INTERVAL '{interval_code}'"
+
+    query_forecast = text(f"""
+        SELECT DISTINCT ON (forecast_time) 
+            forecast_time, predicted_price, lower_bound, upper_bound, execution_time
+        FROM forecast_logs
+        {fc_time}
+        ORDER BY forecast_time, execution_time DESC
+        {limit_clause}
     """)
     
     with engine.connect() as conn:
@@ -79,7 +86,7 @@ st.title("⚡ Alpha-Pulse: Quant Trading Dashboard")
 selected_range = st.radio(
     "Range:", 
     options=["15M", "30M", "1H", "1D", "1W", "ALL"], 
-    index=1, # Default to 30M
+    index=2, # Default to 1H to see context
     horizontal=True,
     key="time_selector"
 )
@@ -94,59 +101,52 @@ if df_market.empty:
     st.rerun()
 
 # 3. Metrics Calculation
-# We calculate these BEFORE using them in the UI
 latest_close = df_market['close'].iloc[-1]
 latest_open = df_market['open'].iloc[-1]
 diff = latest_close - latest_open
 pct = (diff / latest_open) * 100
-sentiment = df_market['sentiment_score'].iloc[-1]  # <--- THIS DEFINES 'sentiment'
+sentiment = df_market['sentiment_score'].iloc[-1]
 
-# 4. Visual Stitching
-# Connects the green candles to the yellow forecast line
+# 4. Visual Stitching (Connecting the Lines)
+# We connect the green line (Actuals) to the yellow line (Forecast)
+# only if there is a gap between them.
 if not df_market.empty and not df_forecast.empty:
     last_actual_time = df_market['bucket_time'].iloc[-1]
     last_actual_price = df_market['close'].iloc[-1]
     
-    bridge_row = pd.DataFrame({
-        'forecast_time': [last_actual_time], 
-        'predicted_price': [last_actual_price],
-        'lower_bound': [last_actual_price],
-        'upper_bound': [last_actual_price]
-    })
-    df_forecast = pd.concat([bridge_row, df_forecast], ignore_index=True)
+    # Check if the forecast starts AFTER the actuals end
+    if df_forecast['forecast_time'].iloc[0] > last_actual_time:
+        bridge_row = pd.DataFrame({
+            'forecast_time': [last_actual_time], 
+            'predicted_price': [last_actual_price],
+            'lower_bound': [last_actual_price],
+            'upper_bound': [last_actual_price]
+        })
+        df_forecast = pd.concat([bridge_row, df_forecast], ignore_index=True).sort_values('forecast_time')
 
 # 5. Render Metrics
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 
-kpi1.metric(
-    "Bitcoin Price", 
-    f"${latest_close:,.2f}", 
-    f"{diff:+.2f} ({pct:+.2f}%)"
-)
+kpi1.metric("Bitcoin Price", f"${latest_close:,.2f}", f"{diff:+.2f} ({pct:+.2f}%)")
 
-# Logic for Sentiment Label
 sent_label = "Neutral"
-if sentiment > 0.05: 
-    sent_label = "Bullish"
-elif sentiment < -0.05: 
-    sent_label = "Bearish"
+if sentiment > 0.05: sent_label = "Bullish"
+elif sentiment < -0.05: sent_label = "Bearish"
 
-kpi2.metric(
-    "Sentiment", 
-    f"{sentiment:.4f}", 
-    sent_label
-)
+kpi2.metric("Sentiment", f"{sentiment:.4f}", sent_label)
 
-kpi3.metric("Status", "Online 🟢", f"View: {selected_range}")
+kpi3.metric("Forecast Model", "Prophet (60m)", "Active 🟢")
 
 # Anomaly Logic
 is_anomaly = False
 if not df_forecast.empty:
-    check_idx = 1 if len(df_forecast) > 1 else 0
-    first_pred = df_forecast.iloc[check_idx]
-    
-    if latest_close < first_pred['lower_bound'] or latest_close > first_pred['upper_bound']:
-        is_anomaly = True
+    # Check against the prediction for the CURRENT time
+    current_pred = df_forecast[df_forecast['forecast_time'] == df_market['bucket_time'].iloc[-1]]
+    if not current_pred.empty:
+        lower = current_pred['lower_bound'].iloc[0]
+        upper = current_pred['upper_bound'].iloc[0]
+        if latest_close < lower or latest_close > upper:
+            is_anomaly = True
 
 if is_anomaly:
     kpi4.error("⚠️ ANOMALY DETECTED")
@@ -160,22 +160,13 @@ fig = go.Figure()
 
 # A. Confidence Band
 fig.add_trace(go.Scatter(
-    x=df_forecast['forecast_time'],
-    y=df_forecast['lower_bound'],
-    mode='lines',
-    line=dict(width=0),
-    showlegend=False,
-    hoverinfo='skip'
+    x=df_forecast['forecast_time'], y=df_forecast['lower_bound'],
+    mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
 ))
 fig.add_trace(go.Scatter(
-    x=df_forecast['forecast_time'],
-    y=df_forecast['upper_bound'],
-    mode='lines',
-    line=dict(width=0),
-    fill='tonexty',
-    fillcolor='rgba(0, 200, 255, 0.15)',
-    name='Confidence (95%)',
-    hoverinfo='skip'
+    x=df_forecast['forecast_time'], y=df_forecast['upper_bound'],
+    mode='lines', line=dict(width=0), fill='tonexty',
+    fillcolor='rgba(0, 200, 255, 0.1)', name='Confidence (95%)', hoverinfo='skip'
 ))
 
 # B. Actual Price
@@ -184,24 +175,19 @@ fig.add_trace(go.Candlestick(
     open=df_market['open'], high=df_market['high'],
     low=df_market['low'], close=df_market['close'],
     name='BTC Actual',
-    increasing_line_color='#26a69a', 
-    decreasing_line_color='#ef5350'
+    increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
 ))
 
-# C. AI Prediction
+# C. AI Forecast
 fig.add_trace(go.Scatter(
-    x=df_forecast['forecast_time'],
-    y=df_forecast['predicted_price'],
-    mode='lines',
-    name='AI Forecast',
+    x=df_forecast['forecast_time'], y=df_forecast['predicted_price'],
+    mode='lines', name='AI Forecast',
     line=dict(color='#C0C0F0', width=2)
 ))
 
 fig.update_layout(
-    template="plotly_dark",
-    height=600,
-    xaxis_rangeslider_visible=False,
-    hovermode="x unified",
+    template="plotly_dark", height=600,
+    xaxis_rangeslider_visible=False, hovermode="x unified",
     margin=dict(l=10, r=10, t=10, b=10),
     legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)"),
     xaxis=dict(type='date')
@@ -214,18 +200,10 @@ st.markdown("### 📋 Raw Data Feed")
 c1, c2 = st.columns(2)
 with c1:
     st.caption("Recent Market Data")
-    # Ensuring all columns exist before displaying
-    cols_to_show = ['bucket_time', 'close', 'volume', 'sentiment_score']
-    st.dataframe(
-        df_market.tail(10)[cols_to_show].sort_values('bucket_time', ascending=False), 
-        use_container_width=True
-    )
+    st.dataframe(df_market.tail(10)[['bucket_time', 'close', 'volume', 'sentiment_score']].sort_values('bucket_time', ascending=False), use_container_width=True)
 with c2:
-    st.caption("Latest AI Forecast")
-    st.dataframe(
-        df_forecast.tail(10)[['forecast_time', 'predicted_price', 'lower_bound', 'upper_bound']], 
-        use_container_width=True
-    )
+    st.caption("Extended AI Forecast")
+    st.dataframe(df_forecast.tail(10)[['forecast_time', 'predicted_price', 'lower_bound', 'upper_bound']], use_container_width=True)
 
 # Auto-Refresh
 time.sleep(2)
