@@ -99,11 +99,3 @@ Issues and PRs are welcome. For big changes, open an issue first to discuss the 
 ## License
 
 MIT License
-
----
-
-If you'd like, I can also:
-
-- Add badges (build, license, python version)
-- Add a small `requirements.txt` for running locally
-- Create a `docker` development section with environment variable instructions
