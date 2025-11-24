@@ -2,6 +2,8 @@
 
 AI-powered quantitative trading dashboard and real-time data pipeline for cryptocurrency markets.
 
+<img width="1798" height="818" alt="image" src="https://github.com/user-attachments/assets/3c59dcc9-6f92-4460-9f1d-2f252624fcfb" />
+
 Alpha-Pulse ingests live market data and news sentiment, runs a rolling-window forecasting model, and serves visualizations through a Streamlit dashboard.
 
 ## Table of contents
