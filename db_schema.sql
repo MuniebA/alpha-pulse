@@ -54,3 +54,6 @@ CREATE INDEX IF NOT EXISTS idx_candles_time ON market_candles (bucket_time DESC)
 
 -- Index for querying forecasts by execution batch
 CREATE INDEX IF NOT EXISTS idx_forecast_exec ON forecast_logs (execution_time DESC);
+
+
+ALTER TABLE forecast_logs ADD COLUMN symbol VARCHAR(20) DEFAULT 'BTCUSDT';

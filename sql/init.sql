@@ -31,3 +31,6 @@ CREATE TABLE IF NOT EXISTS forecast_logs (
     lower_bound DOUBLE PRECISION,
     upper_bound DOUBLE PRECISION
 );
+
+
+ALTER TABLE forecast_logs ADD COLUMN symbol VARCHAR(20) DEFAULT 'BTCUSDT';
