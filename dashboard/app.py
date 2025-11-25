@@ -19,7 +19,7 @@ selected_symbol = st.sidebar.selectbox(
 st.set_page_config(
     page_title="Alpha-Pulse Terminal", 
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"   # <--- TO THIS
 )
 
 
@@ -46,38 +46,36 @@ TIME_RANGES = {
 def load_data(interval_code, symbol):
     """Fetch clean OHLC data and a continuous forecast history."""
     
+    # 1. Initialize Base WHERE Clause
+    # We start with the symbol filter because it is ALWAYS required.
+    # This ensures the SQL always starts with "WHERE ...", avoiding syntax errors.
+    market_where = "WHERE symbol = :symbol"
+    forecast_where = "WHERE symbol = :symbol"
+    limit_clause = ""
+
+    # 2. Add Time Filter (if not ALL)
     if interval_code == "ALL":
-        time_clause = ""
         limit_clause = "LIMIT 50000"
     else:
-        time_clause = f"WHERE bucket_time >= NOW() - INTERVAL '{interval_code}'"
-        limit_clause = ""
+        # Since we already have "WHERE ...", we append with "AND"
+        market_where += f" AND bucket_time >= NOW() - INTERVAL '{interval_code}'"
+        forecast_where += f" AND forecast_time >= NOW() - INTERVAL '{interval_code}'"
 
-    # 1. Fetch Market Data
-    # Add "AND symbol = :symbol"
+    # 3. Fetch Market Data
     query_market = text(f"""
         SELECT bucket_time, open, high, low, close, sentiment_score, volume
         FROM market_candles
-        {time_clause} AND symbol = :symbol
+        {market_where}
         ORDER BY bucket_time ASC
         {limit_clause}
     """)
     
-    # 2. Fetch Forecast Data (The "Continuous Line" Fix)
-    # We use DISTINCT ON to grab the LATEST prediction made for every specific timestamp.
-    # This means if the AI predicted "10:05" five times (at 10:00, 10:01, etc.),
-    # we only take the most recent opinion it had.
-    if interval_code == "ALL":
-        fc_time = ""
-    else:
-        # We look a bit further ahead for the forecast (+60 mins) to show future curve
-        fc_time = f"WHERE forecast_time >= NOW() - INTERVAL '{interval_code}'"
-
+    # 4. Fetch Forecast Data
     query_forecast = text(f"""
         SELECT DISTINCT ON (forecast_time) 
             forecast_time, predicted_price, lower_bound, upper_bound, execution_time
         FROM forecast_logs
-        {fc_time} AND symbol = :symbol
+        {forecast_where}
         ORDER BY forecast_time, execution_time DESC
         {limit_clause}
     """)
