@@ -5,10 +5,14 @@ from prophet import Prophet
 import logging
 import os
 
+# List of symbols to forecast
+SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
+
 # --- CONFIGURATION ---
 # Defaults to 'localhost' if not running in Docker
 db_host = os.getenv("DB_HOST", "localhost")
 DB_URL = f"postgresql://user:password@{db_host}:5432/alpha_db"
+
 
 TRAINING_WINDOW_MINUTES = 60  # Look back 60 minutes
 FORECAST_HORIZON = 5         # Predict next 5 minutes
@@ -19,20 +23,17 @@ engine = create_engine(DB_URL)
 logging.getLogger('cmdstanpy').setLevel(logging.WARNING)
 logging.getLogger('prophet').setLevel(logging.WARNING)
 
-def fetch_training_data():
-    """
-    Fetches the last 60 minutes of clean candle data.
-    """
+def fetch_training_data(symbol):
+    """Fetches data for a SPECIFIC symbol."""
     query = text(f"""
         SELECT bucket_time, close, sentiment_score
         FROM market_candles
         WHERE bucket_time >= NOW() - INTERVAL '{TRAINING_WINDOW_MINUTES} minutes'
+        AND symbol = :symbol
         ORDER BY bucket_time ASC
     """)
-    
     with engine.connect() as conn:
-        df = pd.read_sql(query, conn)
-    
+        df = pd.read_sql(query, conn, params={"symbol": symbol})
     return df
 
 def prepare_data(df):
@@ -59,52 +60,48 @@ def prepare_data(df):
     return df
 
 def generate_forecast():
-    print(" Training Model...", end=" ")
+    print("🧠 Starting Forecast Cycle...")
     
-    # 1. Get Data
-    raw_df = fetch_training_data()
-    if len(raw_df) < 20:
-        print(" Not enough data yet (Need > 20 mins). Waiting...")
-        return
+    for symbol in SYMBOLS:
+        print(f"   > Processing {symbol}...", end=" ")
+        
+        raw_df = fetch_training_data(symbol)
+        if len(raw_df) < 20:
+            print("Not enough data yet.")
+            continue # Skip to next symbol
 
-    # 2. Clean Data
-    df = prepare_data(raw_df)
+        df = prepare_data(raw_df)
+        
+        # ... (The rest of the Prophet logic stays the same) ...
+        model = Prophet(interval_width=0.95)
+        model.add_regressor('sentiment_score')
+        model.fit(df)
+        
+        future = model.make_future_dataframe(periods=FORECAST_HORIZON, freq='min')
+        future['sentiment_score'] = df['sentiment_score'].iloc[-1]
+        forecast = model.predict(future)
+        
+        # Filter for future only
+        last_actual_time = df['ds'].iloc[-1]
+        future_forecast = forecast[forecast['ds'] > last_actual_time]
+        
+        if not future_forecast.empty:
+            save_forecast(symbol, future_forecast) # <--- Pass symbol here
+            print(f"Saved!")
 
-    # 3. Train Prophet Model
-    model = Prophet(interval_width=0.95)  # 95% Confidence Interval
-    model.add_regressor('sentiment_score')
-    model.fit(df)
-
-    # 4. Create Future Dataframe (10 mins ahead)
-    future = model.make_future_dataframe(periods=FORECAST_HORIZON, freq='min')
-    
-    # Assumption: Future sentiment stays the same as the last known sentiment
-    last_sentiment = df['sentiment_score'].iloc[-1]
-    future['sentiment_score'] = last_sentiment
-
-    # 5. Predict
-    forecast = model.predict(future)
-    
-    # 6. Save ONLY the future predictions to DB
-    # We filter for times that are *after* our last known actual data
-    last_actual_time = df['ds'].iloc[-1]
-    future_forecast = forecast[forecast['ds'] > last_actual_time]
-    
-    save_forecast(future_forecast)
-    print(f" Prediction Saved! (Next target: ${future_forecast['yhat'].iloc[-1]:.2f})")
-
-def save_forecast(forecast_df):
+def save_forecast(symbol, forecast_df):
     with engine.connect() as conn:
         for _, row in forecast_df.iterrows():
             query = text("""
-                INSERT INTO forecast_logs (forecast_time, predicted_price, lower_bound, upper_bound)
-                VALUES (:time, :price, :low, :high)
+                INSERT INTO forecast_logs (forecast_time, predicted_price, lower_bound, upper_bound, symbol)
+                VALUES (:time, :price, :low, :high, :symbol)
             """)
             conn.execute(query, {
                 "time": row['ds'],
                 "price": row['yhat'],
                 "low": row['yhat_lower'],
-                "high": row['yhat_upper']
+                "high": row['yhat_upper'],
+                "symbol": symbol # <--- Save the symbol
             })
             conn.commit()
 

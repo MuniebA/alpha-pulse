@@ -38,19 +38,17 @@ def clean_html(dirty_html):
 
 def update_db_sentiment(bucket_time, avg_score):
     """
-    Updates the existing candle with the new sentiment score.
+    Updates ALL candles matching this time with the global sentiment score.
     """
     try:
-        # Sleep briefly to ensure the trade candle exists first
         time.sleep(2)
-        
         with engine.connect() as conn:
-            # We update the candle that matches this minute
+            # Removed "AND symbol = 'BTCUSDT'"
+            # This ensures BTC, ETH, SOL, and XRP candles ALL get the score
             query = text("""
                 UPDATE market_candles 
                 SET sentiment_score = :score
                 WHERE bucket_time = :time 
-                AND symbol = 'BTCUSDT'
             """)
             result = conn.execute(query, {
                 "score": avg_score,
@@ -59,12 +57,12 @@ def update_db_sentiment(bucket_time, avg_score):
             conn.commit()
             
             if result.rowcount > 0:
-                print(f"[NEWS] Sentiment Updated: {bucket_time} | Score: {avg_score:.4f}")
+                print(f"✅ [NEWS] Updated {result.rowcount} candles | Score: {avg_score:.4f}")
             else:
-                print(f"[NEWS] No candle found for {bucket_time} (Market quiet?).")
+                print(f"⚠️ [NEWS] No candles found for {bucket_time}.")
 
     except Exception as e:
-        print(f"[NEWS] DB Error: {e}")
+        print(f"❌ [NEWS] DB Error: {e}")
 
 def process_news_stream():
     global current_minute, sentiment_buffer, seen_links

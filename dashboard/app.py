@@ -5,12 +5,23 @@ from sqlalchemy import create_engine, text
 import time
 import os
 
+
+# --- SIDEBAR CONFIGURATION ---
+st.sidebar.title("⚙️ Settings")
+selected_symbol = st.sidebar.selectbox(
+    "Select Asset",
+    ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"],
+    index=0
+)
+
+
 # --- CONFIGURATION ---
 st.set_page_config(
     page_title="Alpha-Pulse Terminal", 
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
 
 # Defaults to 'localhost' if not running in Docker
 db_host = os.getenv("DB_HOST", "localhost")
@@ -32,7 +43,7 @@ TIME_RANGES = {
     "ALL": "ALL"
 }
 
-def load_data(interval_code):
+def load_data(interval_code, symbol):
     """Fetch clean OHLC data and a continuous forecast history."""
     
     if interval_code == "ALL":
@@ -43,10 +54,11 @@ def load_data(interval_code):
         limit_clause = ""
 
     # 1. Fetch Market Data
+    # Add "AND symbol = :symbol"
     query_market = text(f"""
         SELECT bucket_time, open, high, low, close, sentiment_score, volume
         FROM market_candles
-        {time_clause}
+        {time_clause} AND symbol = :symbol
         ORDER BY bucket_time ASC
         {limit_clause}
     """)
@@ -65,14 +77,15 @@ def load_data(interval_code):
         SELECT DISTINCT ON (forecast_time) 
             forecast_time, predicted_price, lower_bound, upper_bound, execution_time
         FROM forecast_logs
-        {fc_time}
+        {fc_time} AND symbol = :symbol
         ORDER BY forecast_time, execution_time DESC
         {limit_clause}
     """)
     
     with engine.connect() as conn:
-        df_market = pd.read_sql(query_market, conn)
-        df_forecast = pd.read_sql(query_forecast, conn)
+        # Pass {"symbol": symbol} to both calls
+        df_market = pd.read_sql(query_market, conn, params={"symbol": symbol})
+        df_forecast = pd.read_sql(query_forecast, conn, params={"symbol": symbol})
         
         # Force Datetime objects to be UTC-aware/clean
         if not df_market.empty:
@@ -96,7 +109,7 @@ selected_range = st.radio(
 
 # 2. Data Loading
 interval_val = TIME_RANGES[selected_range]
-df_market, df_forecast = load_data(interval_val)
+df_market, df_forecast = load_data(interval_val, selected_symbol) # Pass selected_symbol
 
 if df_market.empty:
     st.warning(f"⏳ Waiting for data pipeline... (View: {selected_range})")
@@ -130,7 +143,7 @@ if not df_market.empty and not df_forecast.empty:
 # 5. Render Metrics
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 
-kpi1.metric("Bitcoin Price", f"${latest_close:,.2f}", f"{diff:+.2f} ({pct:+.2f}%)")
+kpi1.metric(f"{selected_symbol} Price", f"${latest_close:,.2f}", f"{diff:+.2f} ({pct:+.2f}%)")
 
 sent_label = "Neutral"
 if sentiment > 0.05: sent_label = "Bullish"

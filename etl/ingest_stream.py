@@ -11,27 +11,26 @@ import os
 db_host = os.getenv("DB_HOST", "localhost")
 DB_URL = f"postgresql://user:password@{db_host}:5432/alpha_db"
 
-BINANCE_URL = "wss://stream.binance.com:9443/ws/btcusdt@trade"
+# List of symbols to track (Lower case for Binance URL)
+SYMBOLS = ["btcusdt", "ethusdt", "solusdt", "xrpusdt"]
+# Construct combined stream URL (e.g. stream?streams=btcusdt@trade/ethusdt@trade)
+STREAMS = "/".join([f"{s}@trade" for s in SYMBOLS])
+BINANCE_URL = f"wss://stream.binance.com:9443/stream?streams={STREAMS}"
 
 # --- DATABASE CONNECTION ---
 engine = create_engine(DB_URL)
 
-# --- GLOBAL STATE (In-Memory Aggregation) ---
-# This holds our data while we wait for the minute to finish
-current_candle = {
-    'open': None,
-    'high': float('-inf'),
-    'low': float('inf'),
-    'close': None,
-    'volume': 0.0,
-    'start_time': None,
-    'trade_count': 0
-}
+# --- GLOBAL STATE (Multi-Symbol Aggregation) ---
+# Key: Symbol (e.g., 'BTCUSDT'), Value: Candle Dict
+active_candles = {}
+
+def get_empty_candle():
+    return {
+        'open': None, 'high': float('-inf'), 'low': float('inf'),
+        'close': None, 'volume': 0.0, 'start_time': None, 'trade_count': 0
+    }
 
 def save_raw_tick(tick_data):
-    """
-    Saves the raw dirty JSON data immediately to the audit table.
-    """
     try:
         with engine.connect() as conn:
             query = text("""
@@ -48,10 +47,7 @@ def save_raw_tick(tick_data):
     except Exception as e:
         print(f"⚠️ Error saving raw tick: {e}")
 
-def save_candle_to_db(candle_data):
-    """
-    Saves the clean, aggregated 1-minute candle to the DB.
-    """
+def save_candle_to_db(symbol, candle_data):
     try:
         with engine.connect() as conn:
             query = text("""
@@ -63,7 +59,7 @@ def save_candle_to_db(candle_data):
             """)
             conn.execute(query, {
                 "time": candle_data['start_time'],
-                "symbol": "BTCUSDT",
+                "symbol": symbol,  # <--- NOW DYNAMIC
                 "open": candle_data['open'],
                 "high": candle_data['high'],
                 "low": candle_data['low'],
@@ -72,82 +68,69 @@ def save_candle_to_db(candle_data):
                 "count": candle_data['trade_count']
             })
             conn.commit()
-        
-        print(f"[INFO] Candle Saved: {candle_data['start_time']} | Close: ${candle_data['close']}")
-        
+        print(f"✅ [{symbol}] Candle Saved: {candle_data['start_time']} | Close: ${candle_data['close']}")
     except Exception as e:
-        print(f"Error saving candle: {e}")
+        print(f"❌ Error saving candle: {e}")
 
 async def process_message(msg):
-    """
-    Turn 1,000 fast trades into 1 clean 'candle'.
-    """
-    global current_candle
+    global active_candles
     
-    # 1. Parse Data
-    data = json.loads(msg)
+    # Parse Combined Stream Data
+    # Format: {"stream": "btcusdt@trade", "data": {...}}
+    payload = json.loads(msg)
+    data = payload['data']
+    
+    symbol = data['s'] # e.g., "BTCUSDT"
     price = float(data['p'])
     qty = float(data['q'])
-    # Convert ms timestamp to seconds
+    
     # Force UTC Timezone
     trade_time = datetime.fromtimestamp(data['T'] / 1000, timezone.utc)
-    # Remove the timezone info before saving (Postgres 'timestamp without time zone' expects naive time)
     trade_minute = trade_time.replace(second=0, microsecond=0, tzinfo=None)
 
-    # 2. Logic - Is this a new minute?
-    # If start_time is None, it's the first trade we've ever seen. Initialize it.
-    if current_candle['start_time'] is None:
-        current_candle['start_time'] = trade_minute
+    # Initialize state for this symbol if it doesn't exist yet
+    if symbol not in active_candles:
+        active_candles[symbol] = get_empty_candle()
 
-    # If the new trade belongs to a FUTURE minute, the old minute is done.
-    if trade_minute > current_candle['start_time']:
-        # A. Save the COMPLETED candle
-        save_candle_to_db(current_candle)
+    current = active_candles[symbol]
 
-        # B. Reset for the NEW minute
-        current_candle = {
-            'open': price,      # Open is the price of the first trade of the new minute
-            'high': price,
-            'low': price,
-            'close': price,
-            'volume': qty,
-            'start_time': trade_minute,
-            'trade_count': 1
+    # 1. Logic - Is this a new minute?
+    if current['start_time'] is None:
+        current['start_time'] = trade_minute
+
+    if trade_minute > current['start_time']:
+        # Save completed candle for this specific symbol
+        save_candle_to_db(symbol, current)
+        
+        # Reset for new minute
+        active_candles[symbol] = {
+            'open': price, 'high': price, 'low': price, 'close': price,
+            'volume': qty, 'start_time': trade_minute, 'trade_count': 1
         }
-        print(f"New Minute Started: {trade_minute}")
-    
+        print(f"🔄 [{symbol}] New Minute: {trade_minute}")
     else:
-        # C. Still the SAME minute - Just update stats
-        if current_candle['open'] is None: 
-            current_candle['open'] = price # Handle very first initialization
-            
-        current_candle['high'] = max(current_candle['high'], price)
-        current_candle['low'] = min(current_candle['low'], price)
-        current_candle['close'] = price  # Close is always the latest price
-        current_candle['volume'] += qty
-        current_candle['trade_count'] += 1
+        # Update existing candle
+        if current['open'] is None: current['open'] = price
+        current['high'] = max(current['high'], price)
+        current['low'] = min(current['low'], price)
+        current['close'] = price
+        current['volume'] += qty
+        current['trade_count'] += 1
 
 async def connect_to_stream():
-    print(f"Connecting to {BINANCE_URL}...")
-    
+    print(f"Connecting to multi-stream: {BINANCE_URL}...")
     while True:
         try:
             async with websockets.connect(BINANCE_URL) as websocket:
-                print("Connected to Binance Stream!")
-                
+                print("✅ Connected to Binance Multi-Stream!")
                 while True:
                     message = await websocket.recv()
-                    
-                    # 1. Save Raw Tick (Audit Trail - Phase 1 Requirement)
-                    data = json.loads(message)
-                    save_raw_tick(data)
-                    
-                    # 2. Aggregate Candle (Clean Data - Phase 3 Requirement)
+                    # Note: save_raw_tick logic is now best handled inside process_message 
+                    # because we need to parse the 'data' wrapper first.
+                    # So we just call process_message.
                     await process_message(message)
-
         except (websockets.ConnectionClosed, Exception) as e:
-            print(f"[ERROR] Connection dropped: {e}")
-            print("Retrying in 5 seconds...")
+            print(f"❌ Connection lost: {e}. Retrying in 5s...")
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
